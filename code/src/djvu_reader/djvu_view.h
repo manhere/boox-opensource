@@ -2,7 +2,6 @@
 #define DJVU_VIEW_H_
 
 #include "djvu_utils.h"
-#include "djvu_render_proxy.h"
 #include "djvu_page.h"
 
 using namespace vbf;
@@ -10,21 +9,21 @@ using namespace sketch;
 namespace djvu_reader
 {
 
-class DjvuModel;
+class DjVuModel;
 class ThumbnailView;
-class DjvuView : public BaseView
+class DjVuView : public BaseView
 {
     Q_OBJECT
 public:
-    explicit DjvuView(QWidget *parent = 0);
-    virtual ~DjvuView(void);
+    explicit DjVuView(QWidget *parent = 0);
+    virtual ~DjVuView(void);
 
     // Interfaces of BaseView
     virtual void attachModel(BaseModel *model);
     virtual void deattachModel();
 
 public:
-    inline DjvuModel* model();
+    inline DjVuModel* model();
 
     // Attach necessary views
     void attachMainWindow(MainWindow *main_window);
@@ -42,7 +41,6 @@ public:
     void autoFlipMultiplePages();
 
 public Q_SLOTS:
-    void onPageRenderReady(DjVuPagePtr page);
     void onPagebarClicked(const int, const int);
     void onPopupMenu();
 
@@ -51,18 +49,13 @@ public Q_SLOTS:
     void onRequestUpdateScreen();
 
 private Q_SLOTS:
-    void onDocReady();
-    void onDocError(QString msg, QString file_name, int line_no);
-    void onDocInfo(QString msg);
-    void onDocPageReady();
-    void onDocThumbnailReady(int page_num);
-    void onDocIdle();
-
     void onLayoutDone();
     void onNeedPage(const int page_number);
     void onNeedContentArea(const int page_number);
 
-    void onContentAreaReady(DjVuPagePtr page, const QRect & content_area);
+    void onDocReady();
+    void onPageRenderReady(DjVuPagePtr page);
+    void onContentAreaReady(DjVuPagePtr page);
     void onSaveAllOptions();
 
     void onUpdateBookmark();
@@ -90,11 +83,11 @@ private:
     void resetLayout();
     void switchLayout(PageLayoutType mode);
 
-    bool generateRenderSetting(vbf::PagePtr page, RenderSettingPtr setting);
+    bool generateRenderSetting(vbf::PagePtr page, RenderSetting & setting);
     void updateCurrentPage(const int page_number);
     bool hitTest(const QPoint &point);
     bool hitTestBookmark(const QPoint &point);
-    void paintPage(QPainter & painter, DjVuPagePtr page);
+    void paintPage(QPainter & painter, int page_num, QImage image);
 
     // handle page ready events
     void handleNormalPageReady(DjVuPagePtr page);
@@ -181,7 +174,10 @@ private:
     bool isFullScreenCalculatedByWidgetSize();
 
 private:
-    DjvuModel               *model_;                    ///< Djvu model
+    typedef QMap<int, QImage> DisplayImages;
+
+private:
+    DjVuModel               *model_;                    ///< Djvu model
     scoped_ptr<PageLayout>  layout_;                    ///< pages layout
     PageLayoutType          read_mode_;                 ///< current reading mode
     vbf::MarginArea         cur_margin_;                ///< content margins
@@ -196,8 +192,7 @@ private:
     int                     cur_page_;                  ///< index of current image
     QVector<int>            rendering_pages_;           ///< list of pages' indexes for rendering
 
-    DjvuRenderProxy         render_proxy_;              ///< render proxy
-    DisplayPages<QDjVuPage> display_pages_;             ///< vector of displaying pages
+    DisplayImages           display_images_;            ///< display images
 
     // Popup menu actions
     ZoomSettingActions      zoom_setting_actions_;
@@ -230,9 +225,9 @@ private:
 };
 
 /// clear all of the visible pages
-inline void DjvuView::clearVisiblePages()
+inline void DjVuView::clearVisiblePages()
 {
-    display_pages_.clear();
+    display_images_.clear();
 }
 
 };

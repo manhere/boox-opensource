@@ -11,7 +11,7 @@ using namespace sketch;
 namespace djvu_reader
 {
 
-class DjvuModel;
+class DjVuModel;
 class ThumbnailView : public QWidget
 {
     Q_OBJECT
@@ -26,7 +26,7 @@ public:
     void deattachSketchProxy();
 
     // render context
-    void setModel(DjvuModel *model) { model_ = model; }
+    void setModel(DjVuModel *model) { model_ = model; }
     void setCurrentPage(int page_num);
     void setThumbnail(ThumbPtr thumb);
     void setNextThumbnail(ThumbPtr thumb);
@@ -79,7 +79,7 @@ private:
     ThumbnailPage& getLayoutPage(const int key);
 
 private:
-    DjvuModel*                  model_;
+    DjVuModel*                  model_;
     ThumbnailLayout             layout_;
     SketchProxy                 *sketch_proxy_;
     DisplayPages<BaseThumbnail> display_pages_;

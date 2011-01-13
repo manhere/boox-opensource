@@ -2,7 +2,7 @@
 #define DJVU_MODEL_H_
 
 #include "djvu_utils.h"
-#include "djvu_document.h"
+#include "djvu_source.h"
 
 using namespace ui;
 using namespace vbf;
@@ -10,14 +10,14 @@ using namespace vbf;
 namespace djvu_reader
 {
 
-class DjvuModel : public BaseModel
+class DjVuModel : public BaseModel
 {
     Q_OBJECT
 public:
-    DjvuModel(const QString & program_name);
-    virtual ~DjvuModel();
+    DjVuModel();
+    virtual ~DjVuModel();
 
-    inline QDjVuDocument* document() { return &doc_; }
+    inline DjVuSource* source() { return &source_; }
     bool save();
 
     // Load & Save configurations
@@ -38,8 +38,7 @@ public:
     // Basic information
     int firstPageNumber();
     int getPagesTotalNumber();
-    shared_ptr<ddjvu_pageinfo_t> getPageInfo(int page_no);
-    const QString & path() const { return path_; }
+    const QString & path() const;
 
     // Bookmarks
     QString getPageText(int page_no);
@@ -58,18 +57,11 @@ public:
     QString getDestByTOCIndex(const QModelIndex & index);
 
 Q_SIGNALS:
-    void docError(QString msg, QString file_name, int line_no);
-    void docInfo(QString msg);
     void docReady();
-    void docPageReady();
-    void docThumbnailReady(int page_num);
-    void docIdle();
-
     void requestSaveAllOptions();
 
 private:
     bool openCMS();
-    void loadOutlineItem(QStandardItem * parent, miniexp_t exp, int offset);
 
 private:
     // configuration
@@ -80,8 +72,7 @@ private:
 
     // document info
     bool                is_ready_;
-    QString             path_;
-    QDjVuDocument       doc_;
+    DjVuSource          source_;
 
     scoped_ptr<QStandardItemModel> outline_model_;
 };

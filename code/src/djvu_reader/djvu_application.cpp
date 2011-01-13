@@ -8,7 +8,7 @@ namespace djvu_reader
 DjvuApplication::DjvuApplication(int &argc, char **argv)
     : QApplication(argc, argv)
     , main_window_(this)
-    , model_(argv[0])
+    , model_()
 {
     if (argc > 1)
     {
@@ -26,7 +26,7 @@ bool DjvuApplication::open( const QString &path_name )
 {
     main_window_.attachModel(&model_);
     main_window_.show();
-    DjvuView *view = down_cast<DjvuView*>(main_window_.activateView(DJVU_VIEW));
+    DjVuView *view = down_cast<DjVuView*>(main_window_.activateView(DJVU_VIEW));
 
     // connect the signals with view
     connect( view, SIGNAL(rotateScreen()), this, SLOT(onRotateScreen()) );
@@ -176,7 +176,7 @@ void DjvuApplication::onCreateView(int type, MainWindow* main_window, QWidget*& 
     switch (type)
     {
     case DJVU_VIEW:
-        view = new DjvuView(main_window);
+        view = new DjVuView(main_window);
         break;
     case TOC_VIEW:
         view = new TreeViewDialog(main_window);
@@ -196,7 +196,7 @@ void DjvuApplication::onAttachView(int type, QWidget* view, MainWindow* main_win
     {
     case DJVU_VIEW:
         {
-            dynamic_cast<DjvuView*>(view)->attachMainWindow(main_window);
+            dynamic_cast<DjVuView*>(view)->attachMainWindow(main_window);
         }
         break;
     case TOC_VIEW:
@@ -208,7 +208,7 @@ void DjvuApplication::onAttachView(int type, QWidget* view, MainWindow* main_win
                 return;
             }
             down_cast<TreeViewDialog*>(view)->attachMainWindow(main_window);
-            down_cast<DjvuView*>(reading_view)->attachTreeView(down_cast<TreeViewDialog*>(view));
+            down_cast<DjVuView*>(reading_view)->attachTreeView(down_cast<TreeViewDialog*>(view));
 #endif
         }
         break;
@@ -225,7 +225,7 @@ void DjvuApplication::onDeattachView(int type, QWidget* view, MainWindow* main_w
     switch (type)
     {
     case DJVU_VIEW:
-        down_cast<DjvuView*>(view)->deattachMainWindow(main_window);
+        down_cast<DjVuView*>(view)->deattachMainWindow(main_window);
         break;
     case TOC_VIEW:
         {
@@ -236,7 +236,7 @@ void DjvuApplication::onDeattachView(int type, QWidget* view, MainWindow* main_w
                 return;
             }
             down_cast<TreeViewDialog*>(view)->deattachMainWindow(main_window);
-            down_cast<DjvuView*>(reading_view)->deattachTreeView(down_cast<TreeViewDialog*>(view));
+            down_cast<DjVuView*>(reading_view)->deattachTreeView(down_cast<TreeViewDialog*>(view));
 #endif
         }
         break;
@@ -255,7 +255,7 @@ bool DjvuApplication::flip(int direction)
     {
         return false;
     }
-    return down_cast<DjvuView*>(reading_view)->flip(direction);
+    return down_cast<DjVuView*>(reading_view)->flip(direction);
 }
 
 bool DjvuApplicationAdaptor::flip(int direction)

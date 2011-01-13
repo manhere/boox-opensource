@@ -48,7 +48,7 @@ public Q_SLOTS:
 
 private:
     MainWindow main_window_;
-    DjvuModel  model_;            // Djvu model instance
+    DjVuModel  model_;            // Djvu model instance
     QString    current_path_;     // path of the current document
 
     NO_COPY_AND_ASSIGN(DjvuApplication);

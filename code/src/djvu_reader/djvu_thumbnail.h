@@ -43,7 +43,7 @@ DjvuThumbnail::DjvuThumbnail(DjVuPagePtr page, ZoomFactor zoom_value)
     : image_(0)
     , zoom_value_(zoom_value)
     , name_()
-    , position_(page->pageNum())
+    , position_(page->getPageNumber())
     , rect_(QPoint(0, 0), cms::thumbnailSize(THUMBNAIL_LARGE))
 {
     name_.setNum(position_ + 1);

@@ -1,11 +1,9 @@
 #include "djvu_page.h"
-#include "djvu_document.h"
+#include "djvu_source.h"
 
 namespace djvu_reader
 {
 
-QDjVuPage::ContentAreaMap QDjVuPage::content_areas_;
-QDjVuPage::PageTextEntityMap QDjVuPage::page_texts_;
 static QVector<QRgb> COLOR_TABLE;
 
 static void initialColorTable()
@@ -19,196 +17,364 @@ static void initialColorTable()
     }
 }
 
-// ----------------------------------------
-// QDJVUPAGE
-
-/*! \class QDjVuPage
-    \brief Represent a \a ddjvu_page_t object. */
-
-/*! Construct a \a QDjVuPage object for page \a page_no_
-    of document \a doc. Argument \a parent indicates its 
-    parent in the \a QObject hierarchy. */
-
-QDjVuPage::QDjVuPage(QDjVuDocument *doc, int page_no, QObject *parent)
-  : QObject(parent)
-  , page_(0)
-  , page_no_(page_no)
-  , render_needed_(false)
-  , content_area_needed_(false)
-  , is_ready_(false)
-  , is_thumbnail_(false)
-  , thumbnail_direction_(THUMBNAIL_RENDER_INVALID)
+static void qRect2GRect(const QRect & qrect, GRect & grect)
 {
-    initialColorTable();
-    page_ = ddjvu_page_create_by_pageno(*doc, page_no_);
-    if (!page_)
+    grect.xmin = qrect.left();
+    grect.ymin = qrect.top();
+    grect.xmax = qrect.left() + qrect.width();
+    grect.ymax = qrect.top() + qrect.height();
+}
+
+static void gRect2QRect(const GRect & grect, QRect & qrect)
+{
+    if (grect.isempty())
     {
-        qWarning("QDjVuPage: invalid page number");
+        qrect = QRect();
+    }
+    else
+    {
+        qrect.setLeft(grect.xmin);
+        qrect.setTop(grect.ymin);
+        qrect.setWidth(grect.width());
+        qrect.setHeight(grect.height());
+    }
+}
+
+static void fmt_convert_row(const GPixel *p, int w, char *buf)
+{
+    const uint32_t (*r)[256] = GlobalRenderFormat::instance().rgb;
+    const uint32_t xorval = GlobalRenderFormat::instance().xorval;
+    switch(GlobalRenderFormat::instance().format_style)
+    {
+    case DDJVU_FORMAT_BGR24:    /* truecolor 24 bits in BGR order */
+        {
+            memcpy(buf, (const char*)p, 3 * w);
+            break;
+        }
+    case DDJVU_FORMAT_RGB24:    /* truecolor 24 bits in RGB order */
+        { 
+            while (--w >= 0)
+            {
+                buf[0] = p->r; buf[1] = p->g; buf[2] = p->b; 
+                buf += 3;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_RGBMASK16: /* truecolor 16 bits with masks */
+        {
+            unsigned short *b = (unsigned short*)buf;
+            while (--w >= 0)
+            {
+                b[0]=(r[0][p->r]|r[1][p->g]|r[2][p->b])^xorval;
+                b += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_RGBMASK32: /* truecolor 32 bits with masks */
+        {
+            unsigned int *b = (unsigned int*)buf;
+            while (--w >= 0)
+            {
+                b[0]=(r[0][p->r]|r[1][p->g]|r[2][p->b])^xorval; 
+                b += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_GREY8:    /* greylevel 8 bits */
+        {
+            while (--w >= 0)
+            {
+                buf[0]=(5*p->r + 9*p->g + 2*p->b)>>4; 
+                buf += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_PALETTE8: /* paletized 8 bits (6x6x6 color cube) */
+        {
+            const unsigned int *u = GlobalRenderFormat::instance().palette;
+            while (--w >= 0)
+            {
+                buf[0] = u[r[0][p->r]+r[1][p->g]+r[2][p->b]]; 
+                buf += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_MSBTOLSB: /* packed bits, msb on the left */
+        {
+            unsigned char s = 0, m = 0x80;
+            while (--w >= 0)
+            {
+                if ( 5*p->r + 9*p->g + 2*p->b < 0xc00 ) { s |= m; }
+                if (! (m >>= 1)) { *buf++ = s; s = 0; m = 0x80; }
+                p += 1;
+            }
+            if (m < 0x80) { *buf++ = s; }
+            break;
+        }
+    case DDJVU_FORMAT_LSBTOMSB: /* packed bits, lsb on the left */
+        {
+            unsigned char s = 0, m = 0x1;
+            while (--w >= 0)
+            {
+                if ( 5*p->r + 9*p->g + 2*p->b < 0xc00 ) { s |= m; }
+                if (! (m <<= 1)) { *buf++ = s; s = 0; m = 0x1; }
+                p += 1;
+            }
+            if (m > 0x1) { *buf++ = s; }
+            break;
+        }
+    }
+}
+
+static void
+fmt_convert(GP<GPixmap> pm, char *buffer, int rowsize)
+{
+    int w = pm->columns();
+    int h = pm->rows();
+
+    // Loop on rows
+    if (GlobalRenderFormat::instance().rtoptobottom)
+    {
+        for(int r = h-1; r >= 0; r--, buffer += rowsize)
+        {
+            fmt_convert_row((*pm)[r], w, buffer);
+        }
+    }
+    else
+    {
+        for(int r = 0; r < h; r++, buffer += rowsize)
+        {
+            fmt_convert_row((*pm)[r], w, buffer);
+        }
+    }
+}
+
+static void fmt_convert_row(unsigned char *p, unsigned char *g, int w, char *buf)
+{
+    const unsigned int (*r)[256] = GlobalRenderFormat::instance().rgb;
+    const unsigned int xorval = GlobalRenderFormat::instance().xorval;
+    switch(GlobalRenderFormat::instance().format_style)
+    {
+    case DDJVU_FORMAT_BGR24:    /* truecolor 24 bits in BGR order */
+    case DDJVU_FORMAT_RGB24:    /* truecolor 24 bits in RGB order */
+        {
+            while (--w >= 0)
+            {
+                buf[0] = buf[1] = buf[2] = g[*p];
+                buf += 3;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_RGBMASK16: /* truecolor 16 bits with masks */
+        {
+            unsigned short *b = (unsigned short*)buf;
+            while (--w >= 0)
+            {
+                unsigned char x = g[*p];
+                b[0]=(r[0][x]|r[1][x]|r[2][x])^xorval; 
+                b += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_RGBMASK32: /* truecolor 32 bits with masks */
+        {
+            unsigned int *b = (unsigned int*)buf;
+            while (--w >= 0)
+            {
+                unsigned char x = g[*p];
+                b[0]=(r[0][x]|r[1][x]|r[2][x])^xorval; 
+                b += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_GREY8:    /* greylevel 8 bits */
+        {
+            while (--w >= 0)
+            {
+                buf[0]=g[*p];
+                buf += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_PALETTE8: /* paletized 8 bits (6x6x6 color cube) */
+        {
+            const unsigned int *u = GlobalRenderFormat::instance().palette;
+            while (--w >= 0)
+            {
+                buf[0] = u[g[*p]*(1+6+36)];
+                buf += 1;
+                p += 1;
+            }
+            break;
+        }
+    case DDJVU_FORMAT_MSBTOLSB: /* packed bits, msb on the left */
+        {
+            unsigned char s=0, m=0x80;
+            while (--w >= 0)
+            {
+                if (g[*p] < 0xc0) { s |= m; }
+                if (! (m >>= 1)) { *buf++ = s; s = 0; m = 0x80; }
+                p += 1;
+            }
+            if (m < 0x80) { *buf++ = s; }
+            break;
+        }
+    case DDJVU_FORMAT_LSBTOMSB: /* packed bits, lsb on the left */
+        {
+            unsigned char s = 0, m = 0x1;
+            while (--w >= 0)
+            {
+                if (g[*p] < 0xc0) { s |= m; }
+                if (! (m <<= 1)) { *buf++ = s; s = 0; m = 0x1; }
+                p += 1;
+            }
+            if (m > 0x1) { *buf++ = s; }
+            break;
+        }
+    }
+}
+
+static void fmt_convert(GP<GBitmap> bm, char * buffer, int rowsize)
+{
+    int w = bm->columns();
+    int h = bm->rows();
+    int m = bm->get_grays();
+
+    // Gray levels
+    int i;
+    unsigned char g[256];
+    for (i = 0; i < m; i++)
+    {
+        g[i] = 255 - ( i * 255 + (m - 1)/2 ) / (m - 1);
+    }
+
+    for (i=m; i<256; i++)
+    {
+        g[i] = 0;
+    }
+
+    // Loop on rows
+    if (GlobalRenderFormat::instance().rtoptobottom)
+    {
+        for(int r = h-1; r >= 0; r--, buffer += rowsize)
+        {
+            fmt_convert_row((*bm)[r], g, w, buffer);
+        }
+    }
+    else
+    {
+        for(int r = 0; r < h; r++, buffer += rowsize)
+        {
+            fmt_convert_row((*bm)[r], g, w, buffer);
+        }
+    }
+}
+
+static void fmt_dither(GPixmap *pm, int x, int y)
+{
+    if (GlobalRenderFormat::instance().ditherbits < 8)
+    {
         return;
     }
-    ddjvu_page_set_user_data(page_, (void*)this);
-    doc->add(this);
-
-    if (ddjvu_page_decoding_done(page_))
+    else if (GlobalRenderFormat::instance().ditherbits < 15)
     {
-        is_ready_ = true;
-        updateInfo();
+        pm->ordered_666_dither(x, y);
+    }
+    else if (GlobalRenderFormat::instance().ditherbits < 24)
+    {
+        pm->ordered_32k_dither(x, y);
     }
 }
 
-QDjVuPage::~QDjVuPage()
+static int renderDjVuPage(GP<DjVuImage> image,
+                          const DjVuRenderMode mode,
+                          const QRect & page_rect,
+                          const QRect & render_rect,
+                          unsigned long rowsize,
+                          char *image_buffer )
 {
-    page_no_ = -1;
-    if (page_ != 0)
+    try
     {
-        ddjvu_page_set_user_data(page_, 0);
-        ddjvu_page_release(page_);
-        page_ = 0;
-    }
-}
+        GP<GPixmap> pm;
+        GP<GBitmap> bm;
+        GRect prect, rrect;
+        qRect2GRect(page_rect, prect);
+        qRect2GRect(render_rect, rrect);
 
-/*! Processes DDJVUAPI messages for this page. 
-    The default implementation emits signals for
-    the \a m_error, \a m_info, \a m_pageinfo, \a m_chunk
-    and \a m_relayout and \a m_redisplay messsages. 
-    The return value is a boolean indicating
-    if the message has been processed or rejected. */
-
-bool QDjVuPage::handle(ddjvu_message_t *msg)
-{
-    switch(msg->m_any.tag)
-    {
-    case DDJVU_PAGEINFO:
+        if (GlobalRenderFormat::instance().ytoptobottom)
         {
-            is_ready_ = true;
-            updateInfo();
-            emit pageInfo(this);
-        }
-        return true;
-    case DDJVU_CHUNK:
-        {
-            emit chunk(this, QString::fromAscii(msg->m_chunk.chunkid));
-        }
-        return true;
-    case DDJVU_RELAYOUT:
-        {
-            updateInfo();
-            emit relayout(this);
-        }
-        return true;
-    case DDJVU_REDISPLAY:
-        {
-            emit redisplay(this);
-        }
-        return true;
-    case DDJVU_ERROR:
-        {
-            emit error(this,
-                       QString::fromLocal8Bit(msg->m_error.message),
-                       QString::fromLocal8Bit(msg->m_error.filename), 
-                       msg->m_error.lineno);
-        }
-      return true;
-    case DDJVU_INFO:
-        {
-            emit info(this, QString::fromLocal8Bit(msg->m_info.message));
-        }
-        return true;
-    default:
-      break;
-    }
-    return false;
-}
-
-bool QDjVuPage::implRender(const RenderSetting & setting, ddjvu_format_t * render_format)
-{
-    if (isReady() && isDecodeDone())
-    {
-        ddjvu_rect_t page_rect = {0, 0, setting.contentArea().width(), setting.contentArea().height()};
-        ddjvu_rect_t render_rect = page_rect;
-
-        QImage image(setting.contentArea().size(), QImage::Format_Indexed8);
-        image.setColorTable(COLOR_TABLE);
-        int ret = ddjvu_page_render(page_,
-                                    DDJVU_RENDER_BLACK,
-                                    &page_rect,
-                                    &render_rect,
-                                    render_format,
-                                    image.bytesPerLine(),
-                                    (char*)image.bits());
-        if (ret > 0)
-        {
-            image_ = image;
-            render_needed_ = false;
-            return true;
+            prect.ymin = render_rect.top() + render_rect.height();
+            prect.ymax = prect.ymin + page_rect.height();
+            rrect.ymin = page_rect.top() + page_rect.height();
+            rrect.ymax = rrect.ymin + render_rect.height();
         }
 
-        if (!image_.isNull())
+        if (image) 
         {
-            image_ = QImage();
+            switch (mode)
+            {
+            case DDJVU_RENDER_COLOR:
+                pm = image->get_pixmap(rrect, prect, GlobalRenderFormat::instance().gamma);
+                if (pm == 0)
+                {
+                    bm = image->get_bitmap(rrect, prect);
+                }
+                break;
+            case DDJVU_RENDER_BLACK:
+                bm = image->get_bitmap(rrect, prect);
+                if (bm == 0)
+                {
+                    pm = image->get_pixmap(rrect, prect, GlobalRenderFormat::instance().gamma);
+                }
+                break;
+            case DDJVU_RENDER_MASKONLY:
+                bm = image->get_bitmap(rrect, prect);
+                break;
+            case DDJVU_RENDER_COLORONLY:
+                pm = image->get_pixmap(rrect, prect, GlobalRenderFormat::instance().gamma);
+                break;
+            case DDJVU_RENDER_BACKGROUND:
+                pm = image->get_bg_pixmap(rrect, prect, GlobalRenderFormat::instance().gamma);
+                break;
+            case DDJVU_RENDER_FOREGROUND:
+                pm = image->get_fg_pixmap(rrect, prect, GlobalRenderFormat::instance().gamma);
+                if (pm == 0)
+                {
+                    bm = image->get_bitmap(rrect, prect);
+                }
+                break;
+            }
+        }
+        if (pm != 0)
+        {
+            int dx = rrect.xmin - prect.xmin;
+            int dy = rrect.ymin - prect.xmin;
+            fmt_dither(pm, dx, dy);
+            fmt_convert(pm, image_buffer, rowsize);
+            return 2;
+        }
+        else if (bm != 0)
+        {
+            fmt_convert(bm, image_buffer, rowsize);
+            return 1;
         }
     }
-    render_needed_ = true;
-    return false;
-}
-
-bool QDjVuPage::render(const RenderSetting & setting, ddjvu_format_t * render_format)
-{
-    if (render_setting_ != setting || image_.isNull())
+    catch (GException&)
     {
-        // re-render the page
-        render_setting_ = setting;
-        return implRender(setting, render_format);
     }
-    return true;
-}
-
-bool QDjVuPage::render(ddjvu_format_t * render_format)
-{
-    return implRender(render_setting_, render_format);
-}
-
-void QDjVuPage::lock()
-{
-}
-
-void QDjVuPage::unlock()
-{
-}
-
-void QDjVuPage::updateInfo()
-{
-    if (page_ != 0)
+    catch (...)
     {
-        info_.page_size.setWidth(ddjvu_page_get_width(page_));
-        info_.page_size.setHeight(ddjvu_page_get_height(page_));
-        info_.resolution        = ddjvu_page_get_resolution(page_);
-        info_.gamma             = ddjvu_page_get_gamma(page_);
-        info_.version           = ddjvu_page_get_version(page_);
-        info_.type              = ddjvu_page_get_type(page_);
     }
-}
-
-/*! Returns the page number associated with this page. */
-
-int QDjVuPage::pageNum()
-{
-    return page_no_;
-}
-
-bool QDjVuPage::isDecodeDone()
-{
-    bool ret = ddjvu_page_decoding_done(page_);
-    return ret;
-}
-
-QRect QDjVuPage::contentArea(int page_no)
-{
-    if (QDjVuPage::content_areas_.contains(page_no))
-    {
-        return QDjVuPage::content_areas_[page_no];
-    }
-    return QRect();
+    return 0;
 }
 
 static bool getContentFromPage(const QImage & page,
@@ -398,89 +564,251 @@ static void expandContentArea(const int page_width,
     }
 }
 
-QRect QDjVuPage::getContentArea(ddjvu_format_t * render_format)
+unsigned int tryCalcImageLength(const int width, const int height, QImage::Format f)
 {
-    content_area_needed_ = false;
-    QRect content_area = QDjVuPage::contentArea(page_no_);
-    if (content_area.isValid())
+    unsigned int length = 0;
+    switch (f)
     {
-        return content_area;
+    case QImage::Format_Indexed8:
+        {
+            length = width * height;
+        }
+        break;
+    default:
+        break;
+    }
+    return length;
+}
+
+inline int getTotalRotate(GP<DjVuImage> image, int rotate)
+{
+    GP<DjVuInfo> info = image->get_info();
+    return (rotate + (info != 0 ? info->orientation : 0)) % 4;
+}
+
+// DjVuPageInfo ---------------------------------------------------------------
+
+DjVuPageInfo::DjVuPageInfo()
+: decoded(false)
+, has_text(false)
+, anno_decoded(false)
+, text_decoded(false)
+, initial_rotation_degree(0)
+, dpi(160)
+, ant(0)
+, text(0)
+{
+}
+
+DjVuPageInfo::~DjVuPageInfo()
+{
+}
+
+void DjVuPageInfo::update(GP<DjVuImage> image)
+{
+    if (image == 0)
+    {
+        return;
     }
 
-    if (!isReady() || !isDecodeDone())
+    if (!decoded)
     {
-        content_area_needed_ = true;
-        return content_area;
+        initial_rotation_degree = getTotalRotate(image, 0);
+        page_size = QSize(image->get_width(), image->get_height());
+        if (initial_rotation_degree % 2 != 0)
+        {
+            page_size.transpose();
+        }
+
+        dpi = image->get_dpi();
+        if (page_size.width() <= 0 || page_size.height() <= 0)
+        {
+            page_size = QSize(100, 100);
+            dpi = 160;
+        }
+
+        has_text = !!(image->get_djvu_file()->text != 0);
+        decoded = true;
+    }
+
+    try
+    {
+        if (has_text && !text_decoded)
+        {
+            decodeText(image->get_text());
+        }
+    }
+    catch (GException&)
+    {
+    }
+
+    try
+    {
+        if (!anno_decoded)
+        {
+            decodeAnno(image->get_anno());
+        }
+    }
+    catch (GException&)
+    {
+    }
+}
+
+void DjVuPageInfo::update(const DjVuPageInfo & info)
+{
+    if (!decoded && info.decoded)
+    {
+        initial_rotation_degree = info.initial_rotation_degree;
+        page_size = info.page_size;
+        dpi = info.dpi;
+        has_text = info.has_text;
+        decoded = true;
+    }
+
+    if (!text_decoded && info.text_decoded)
+    {
+        text = info.text;
+        text_decoded = true;
+    }
+
+    if (!anno_decoded && info.anno_decoded)
+    {
+        ant = info.ant;
+        //anno = info.anno;    // TODO. Implement loading annotation
+        anno_decoded = true;
+    }
+}
+
+void DjVuPageInfo::decodeAnno(GP<ByteStream> anno_stream)
+{
+}
+
+void DjVuPageInfo::decodeText(GP<ByteStream> text_stream)
+{
+}
+
+// DjVuPage -------------------------------------------------------------------
+DjVuPage::DjVuPage(int page_num)
+: djvu_image_(0)
+, page_num_(page_num)
+{
+    initialColorTable();
+}
+
+DjVuPage::~DjVuPage()
+{
+}
+
+bool DjVuPage::djvuImageDecoded(DjVuSource * source)
+{
+    GP<DjVuFile> file = source->getDjVuDoc()->get_djvu_file(page_num_);
+    return djvu_image_ != 0 && file->is_decode_ok();
+}
+
+void DjVuPage::clearImage()
+{
+    if (!image_.isNull())
+    {
+        image_ = QImage();
+    }
+}
+
+int DjVuPage::imageLength()
+{
+    if (!image_.isNull())
+    {
+        return image_.numBytes();
+    }
+    return 0;
+}
+
+bool DjVuPage::render(DjVuSource * source, const RenderSetting & render_setting)
+{
+    if (!image_.isNull() && render_setting_ == render_setting)
+    {
+        // update render setting whenever
+        render_setting_ = render_setting;
+        return true;
+    }
+
+    if (!djvuImageDecoded(source))
+    {
+        return false;
+    }
+
+    if (render_setting_ != render_setting &&
+        !source->pageManager()->makeEnoughMemory(tryCalcImageLength(
+                                                    render_setting.contentArea().width(),
+                                                    render_setting.contentArea().height(),
+                                                    QImage::Format_Indexed8),
+                                                    page_num_))
+    {
+        // clear memory fails
+        return false;
+    }
+
+    QRect render_rect = render_setting.contentArea();
+    QImage image(render_setting.contentArea().size(), QImage::Format_Indexed8);
+    image.setColorTable(COLOR_TABLE);
+    render_setting_ = render_setting;
+
+    int ret = renderDjVuPage(djvu_image_, DDJVU_RENDER_BLACK, render_setting.contentArea(),
+                             render_rect, image.bytesPerLine(), (char*)image.bits());
+    if (ret > 0)
+    {
+        image_ = image;
+        return true;
+    }
+
+    if (!image_.isNull())
+    {
+        image_ = QImage();
+    }
+    return false;
+}
+
+QRect DjVuPage::getContentArea(DjVuSource * source)
+{
+    if (content_area_.isValid() || !djvuImageDecoded(source))
+    {
+        return content_area_;
     }
 
     // intialize the content area
-    content_area.setTopLeft(QPoint(0, 0));
-    content_area.setSize(info_.page_size);
+    DjVuPageInfo info = source->getPageInfo(page_num_);
+    content_area_.setTopLeft(QPoint(0, 0));
+    content_area_.setSize(info.page_size);
 
     static const ZoomFactor MAX_SAMPLE_SIZE = 200.0f;
-    ZoomFactor zoom = std::min(MAX_SAMPLE_SIZE /
-                               static_cast<ZoomFactor>(info_.page_size.width()),
-                               MAX_SAMPLE_SIZE /
-                               static_cast<ZoomFactor>(info_.page_size.height()));
+    ZoomFactor zoom = min(MAX_SAMPLE_SIZE /
+                          static_cast<ZoomFactor>(info.page_size.width()),
+                          MAX_SAMPLE_SIZE /
+                          static_cast<ZoomFactor>(info.page_size.height()));
 
-    int width = static_cast<int>(zoom * static_cast<ZoomFactor>(info_.page_size.width()));
-    int height = static_cast<int>(zoom * static_cast<ZoomFactor>(info_.page_size.height()));
+    int width = static_cast<int>(zoom * static_cast<ZoomFactor>(info.page_size.width()));
+    int height = static_cast<int>(zoom * static_cast<ZoomFactor>(info.page_size.height()));
 
-    ddjvu_rect_t page_rect = {0, 0, width, height};
-    ddjvu_rect_t render_rect = page_rect;
-
+    QRect page_rect(QPoint(0, 0), QSize(width, height));
+    QRect render_rect(page_rect);
     QImage image(QSize(width, height), QImage::Format_Indexed8);
     image.setColorTable(COLOR_TABLE);
-    int ret = ddjvu_page_render(page_,
-                                DDJVU_RENDER_BLACK,
-                                &page_rect,
-                                &render_rect,
-                                render_format,
-                                image.bytesPerLine(),
-                                (char*)image.bits());
+    int ret = renderDjVuPage(djvu_image_, DDJVU_RENDER_BLACK, page_rect,
+                             render_rect, image.bytesPerLine(), (char*)image.bits());
     if (ret > 0 &&
         getContentFromPage(image,
                            width,
                            height,
-                           content_area))
+                           content_area_))
     {
-        expandContentArea(width, height, content_area);
-        content_area.setTopLeft(QPoint(
-            static_cast<ZoomFactor>(content_area.left()) / zoom,
-            static_cast<ZoomFactor>(content_area.top()) / zoom));
-        content_area.setBottomRight(QPoint(
-            static_cast<ZoomFactor>(content_area.right()) / zoom,
-            static_cast<ZoomFactor>(content_area.bottom()) / zoom));
-        QDjVuPage::content_areas_[page_no_] = content_area;
+        expandContentArea(width, height, content_area_);
+        content_area_.setTopLeft(QPoint(
+            static_cast<ZoomFactor>(content_area_.left()) / zoom,
+            static_cast<ZoomFactor>(content_area_.top()) / zoom));
+        content_area_.setBottomRight(QPoint(
+            static_cast<ZoomFactor>(content_area_.right()) / zoom,
+            static_cast<ZoomFactor>(content_area_.bottom()) / zoom));
     }
-    return content_area;
-}
-
-PageTextEntities & QDjVuPage::pageTextEntities(int page_no, bool & existed)
-{
-    if (!QDjVuPage::page_texts_.contains(page_no))
-    {
-        PageTextEntities entities;
-        QDjVuPage::page_texts_[page_no] = entities;
-        existed = false;
-    }
-    else
-    {
-        existed = true;
-    }
-    return QDjVuPage::page_texts_[page_no];
-}
-
-DjvuPageInfo::DjvuPageInfo()
-    : resolution(0)
-    , gamma(0.0)
-    , version(0)
-    , type(DDJVU_PAGETYPE_UNKNOWN)
-{
-}
-
-DjvuPageInfo::~DjvuPageInfo()
-{
+    return content_area_;
 }
 
 }
