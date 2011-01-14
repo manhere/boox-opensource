@@ -811,4 +811,84 @@ QRect DjVuPage::getContentArea(DjVuSource * source)
     return content_area_;
 }
 
+int DjVuPage::getTextPosition(DjVuSource * source, const QPoint & pos_in_page, bool return_block_start)
+{
+    if (info_.has_text && !info_.text_decoded)
+    {
+        info_.update(source->readPageInfo(page_num_, true));
+    }
+
+    if (info_.text == 0)
+    {
+        return 0;
+    }
+
+    int text_pos = -1;
+    double best = 1e10;
+    getTextPosition(info_.text->page_zone, pos_in_page, text_pos, best, return_block_start);
+
+    if (text_pos == -1)
+    {
+        text_pos = info_.text->textUTF8.length();
+    }
+    return text_pos;
+}
+
+void DjVuPage::getTextPosition(const DjVuTXT::Zone & zone,
+                               const QPoint & pos_in_page,
+                               int & text_pos,
+                               double & best,
+                               bool return_block_start)
+{
+    if (!zone.children.isempty())
+    {
+        for (GPosition pos = zone.children; pos; ++pos)
+        {
+            getTextPosition(zone.children[pos], pos_in_page, text_pos, best, return_block_start);
+        }
+        return;
+    }
+
+    QPoint pos_diff(0, 0);
+    if (zone.rect.xmin > pos_in_page.x())
+    {
+        pos_diff.setX(zone.rect.xmin - pos_in_page.x());
+    }
+    else if (zone.rect.xmax <= pos_in_page.x())
+    {
+        pos_diff.setX(zone.rect.xmax - pos_in_page.x() - 1);
+    }
+
+    if (zone.rect.ymax <= pos_in_page.y())
+    {
+        pos_diff.setY(pos_in_page.y() - zone.rect.ymax + 1);
+    }
+    else if (zone.rect.ymin > pos_in_page.y())
+    {
+        pos_diff.setY(pos_in_page.y() - zone.rect.ymin);
+    }
+
+    double distance = pow(pow(pos_diff.x(), 2.0) + pow(pos_diff.y(), 2.0), 0.5);
+    if (distance < best)
+    {
+        best = distance;
+        if (!return_block_start && (pos_diff.x() < 0 || pos_diff.x() == 0 && pos_diff.y() < 0))
+        {
+            const DjVuTXT::Zone* current_zone = &zone;
+            const DjVuTXT::Zone* parent = current_zone->get_parent();
+            while (parent != 0 && &parent->children[parent->children.lastpos()] == current_zone)
+            {
+                current_zone = parent;
+                parent = parent->get_parent();
+            }
+
+            text_pos = current_zone->text_start + current_zone->text_length;
+        }
+        else
+        {
+            text_pos = zone.text_start;
+        }
+    }
+}
+
 }

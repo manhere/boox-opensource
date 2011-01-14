@@ -288,14 +288,66 @@ void DjVuModel::getBookmarksModel(QStandardItemModel & bookmarks_model)
 
 bool DjVuModel::hasOutlines()
 {
-    // TODO. Implement Me
-    return false;
+    return source_.getContents()->getBookMarkList().size() > 0;
 }
 
 QStandardItemModel* DjVuModel::getOutlineModel()
 {
-    // TODO. Implement Me.
+    if (outline_model_ != 0)
+    {
+        return outline_model_.get();
+    }
+
+    if (hasOutlines())
+    {
+        const GPList<DjVmNav::DjVuBookMark>& items = source_.getContents()->getBookMarkList();
+        GPosition pos = items;
+        outline_model_.reset( new QStandardItemModel() );
+        QStandardItem *root = outline_model_->invisibleRootItem();
+        loadOutlineItem(root, items, pos, items.size());
+
+        // set header data
+        outline_model_->setHeaderData(0, Qt::Horizontal, QVariant::fromValue(tr("Title")), Qt::DisplayRole);
+        outline_model_->setHeaderData(1, Qt::Horizontal, QVariant::fromValue(tr("Page")), Qt::DisplayRole);
+        return outline_model_.get();
+    }
     return 0;
+}
+
+void DjVuModel::loadOutlineItem(QStandardItem * parent,
+                                const GPList<DjVmNav::DjVuBookMark> & items,
+                                GPosition & pos,
+                                int count)
+{
+    for (int i = 0; i < count && !!pos; ++i)
+    {
+        const GP<DjVmNav::DjVuBookMark> bm = items[pos];
+
+        QString title = QString::fromUtf8(bm->displayname.getbuf());
+        QString dest  = QString::fromUtf8(bm->url.getbuf());
+        //if (dest.isEmpty() || ((dest.at(0) == QLatin1Char('#')) && (dest.remove(0, 1) != title)))
+        if (!title.isEmpty())
+        {
+            if (!dest.isEmpty() && dest.at(0) == QLatin1Char('#'))
+            {
+                dest.remove(0, 1);
+            }
+            QStandardItem *model_item = new QStandardItem(title);
+            model_item->setData(dest, OUTLINE_ITEM);
+
+            QStandardItem *page_item = new QStandardItem(dest);
+            page_item->setTextAlignment( Qt::AlignCenter );
+            page_item->setData(dest, OUTLINE_ITEM);
+
+            int row_count = parent->rowCount();
+            parent->appendRow( model_item );
+            if (page_item != 0)
+            {
+                parent->setChild( row_count, 1, page_item );
+            }
+        }
+        loadOutlineItem(parent, items, ++pos, bm->count);
+    }
 }
 
 QString DjVuModel::getDestByTOCIndex(const QModelIndex & index)

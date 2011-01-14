@@ -62,6 +62,7 @@ Q_SIGNALS:
 
 private:
     bool openCMS();
+    void loadOutlineItem(QStandardItem * parent, const GPList<DjVmNav::DjVuBookMark> & items, GPosition & pos, int count);
 
 private:
     // configuration

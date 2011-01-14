@@ -108,6 +108,10 @@ public:
       /** This function determines if the given count_array is a tree
           sequence, that is if it fits a tree. */
    int get_tree(int index, int* count_array, int count_array_size);
+
+   // Updated by Onyx
+   const GPList<DjVuBookMark>& getBookMarkList() const { return bookmark_list; }
+   // ---
 protected:
    DjVmNav(void) { } ;
 private:

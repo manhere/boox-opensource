@@ -51,8 +51,15 @@ public:
     bool render(DjVuSource * source, const RenderSetting & render_setting);
     QRect getContentArea(DjVuSource * source);
 
+    int getTextPosition(DjVuSource * source, const QPoint & pos_in_page, bool return_block_start = false);
+
 private:
     bool djvuImageDecoded(DjVuSource * source);
+    void getTextPosition(const DjVuTXT::Zone & zone,
+                         const QPoint & pos_in_page,
+                         int & text_pos,
+                         double & best,
+                         bool return_block_start);
 
 private:
     GP<DjVuImage>               djvu_image_;

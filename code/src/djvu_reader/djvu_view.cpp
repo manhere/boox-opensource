@@ -1583,6 +1583,18 @@ void DjVuView::panRelease( QMouseEvent *me )
     }
 }
 
+void DjVuView::penPress( QMouseEvent *me )
+{
+}
+
+void DjVuView::penMove( QMouseEvent *me )
+{
+}
+
+void DjVuView::penRelease( QMouseEvent *me )
+{
+}
+
 void DjVuView::setSketchMode( const SketchMode mode, bool selected )
 {
     FunctionStatus s = selected ? FUNC_SELECTED : FUNC_NORMAL;

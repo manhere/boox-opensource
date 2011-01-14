@@ -60,6 +60,7 @@ private:
 
     friend class DjVuRenderTask;
     friend class DjVuGetContentTask;
+    friend class DjVuPage;
 };
 
 };

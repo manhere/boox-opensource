@@ -136,6 +136,11 @@ private:
     void panRelease( QMouseEvent *me );
     void scroll(int offset_x, int offset_y);
 
+    // Pen
+    void penPress( QMouseEvent *me );
+    void penMove( QMouseEvent *me );
+    void penRelease( QMouseEvent *me );
+
     // Sketch
     void setSketchMode( const SketchMode mode, bool selected );
     void setSketchColor( const SketchColor color );
